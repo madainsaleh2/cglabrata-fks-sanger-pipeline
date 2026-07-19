@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Pipeline output
+Results/
+results/
+*.csv
+
+# Local backups / scratch
+*_backup_*.py
+*.bak

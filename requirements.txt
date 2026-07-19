@@ -1,0 +1,2 @@
+# Pinned to the versions used for the published analysis.
+biopython==1.87

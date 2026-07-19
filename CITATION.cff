@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: "FKS Sanger Pipeline"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - family-names: Alsanea
+    given-names: Madain
+repository-code: "https://github.com/USERNAME/fks-sanger-pipeline"
+abstract: >-
+  Automated detection of FKS1 and FKS2 hotspot mutations from paired Sanger
+  sequencing chromatograms in Nakaseomyces glabratus. Performs quality
+  trimming, forward/reverse consensus assembly, translation, and variant
+  calling with explicit quality gates. Reports mutations only; no clinical
+  interpretation is applied.
+keywords:
+  - Sanger sequencing
+  - Nakaseomyces glabratus
+  - Candida glabrata
+  - FKS1
+  - FKS2
+  - bioinformatics
+license: MIT
+version: 1.0.0
+date-released: "2026-07-19"

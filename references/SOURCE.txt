@@ -1,0 +1,29 @@
+
+These reference sequences were retrived from NCBI. 
+
+The genes annotation submitted by Johns Hopkins Medical Institution under the name : 
+
+"Nakaseomyces glabratus genome assembly ASM1011175v1" 
+
+NCBI RefSeq assembly GCF_010111755.1
+
+Submitted GenBank assembly GCA_010111755.1
+
+Taxon Nakaseomyces glabratus
+
+Strain ATCC 2001
+
+Assembly type haploid
+
+Relation to type material assembly from type material
+
+Submitter Johns Hopkins Medical Institution
+
+Date Feb 3, 2020
+
+
+Chromosome 	GenBank  	RefSeq
+
+Chromosome G	CP048124.1	NC_088957.1
+
+ Chromosome K	CP048128.1	NC_088961.1
