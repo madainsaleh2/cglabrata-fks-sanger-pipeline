@@ -6,41 +6,63 @@ sequencing chromatograms in **_Nakaseomyces glabratus_** (formerly *Candida glab
 The *FKS1* and *FKS2* genes encode subunits of β-1,3-glucan synthase, the target of
 the echinocandin antifungals. Mutations cluster in two short, conserved "hotspot"
 windows in each gene. This pipeline reads raw `.ab1` traces, builds a
-quality-controlled forward/reverse consensus, translates it, and reports every
-nucleotide and amino-acid difference from the reference.
+quality-controlled forward/reverse consensus, translates it, and reports
+nucleotide and amino-acid differences from the reference.
 
 > **Scope.** This pipeline **detects and reports mutations only.** It performs no
 > clinical interpretation — no resistance calls, drug susceptibility, or MIC
-> assignment. Interpretation is done separately against a curated database, so
-> that reference data has a single maintained source of truth.
+> assignment.
+
+> **Reporting standard (haploid).** *N. glabratus* is haploid, so a true mutation is
+> homozygous and must be independently confirmed on **both** strands. A variant is
+> reported only when the forward and reverse reads **agree on the variant base at the
+> mutated position**, with no local indels or forward/reverse discordance. Single-strand
+> or strand-discordant calls are kept in the audit output but are **not** reported as
+> findings.
 
 ---
 
 ## What it does
 
-Per sample × hotspot, the pipeline:
+Per sample × amplicon, the pipeline:
 
 1. **Reads** the forward and reverse `.ab1` chromatograms (base calls + Phred scores).
 2. **Trims** low-quality read ends with a sliding window (default: mean Q ≥ 20 over 10 bases).
 3. **Reverse-complements** the reverse read and aligns both to the reference CDS.
 4. **Builds a consensus**, resolving forward/reverse disagreements by Phred score.
 5. **Calls variants**, translating each fully-covered codon (standard genetic code).
-6. **Applies quality gates** and reports the result as evaluable or inconclusive.
-7. **Exports** a CSV with one row per sample × hotspot.
+6. **Classifies** each mutation by gene (FKS1/FKS2) and region (HS1/HS2/Outside).
+7. **Scores** each mutation for bidirectional confirmation and local reliability.
+8. **Exports** three CSV reports (below).
+
+### Reports
+
+| File | Contents |
+|---|---|
+| `<prefix>_<ts>.csv` | Amplicon-level QC report — one row per sample × amplicon |
+| `<prefix>_by_region_<ts>.csv` | Every called mutation, with FKS/HS classification and confirmation flags (full audit trail) |
+| `<prefix>_confirmed_<ts>.csv` | **The reportable set** — both-strand-confirmed mutations from evaluable amplicons only |
+
+Key columns in the mutation reports: `Both_Strand_Confirmed` (Yes/No),
+`Strand_Support` (both/single/conflict), `Local_Conflicts`, `Local_Indels`,
+`Edge_Dist_bp`, `Isolate_Count` (recurrence), `Confidence` (High/Moderate/Low).
 
 ### Quality control
 
-Three safeguards prevent over-confident calls — they judge whether the *sequencing*
-is trustworthy, not whether a mutation is clinically significant:
+Safeguards judge whether the *sequencing* is trustworthy, not whether a mutation is
+clinically significant:
 
 | Guard | Rule | Rationale |
 |---|---|---|
-| **Single-strand confidence** | A base covered by only one strand must reach Q30 to be called; otherwise masked | Positions covered by both strands cross-validate each other; a lone read has no such check |
-| **Coverage guard** | A "no mutation" result is downgraded if the hotspot is not fully covered; 0% coverage is reported as inconclusive | Absence of a mutation across unsequenced codons is not evidence of absence |
-| **Reliability gate** | A hotspot with indels or excessive forward/reverse discordance inside the window is reported as inconclusive | Indel/discordance clusters are the signature of misalignment in a low-quality read, and generate artefactual substitutions and premature stop codons |
+| **Bidirectional confirmation** | A mutation is reported only if the forward and reverse reads agree on the variant base at the mutated position | *N. glabratus* is haploid; a real mutation is homozygous and must appear on both strands. This is the governing filter for the reportable set |
+| **Coverage guard** | A "no mutation" result is downgraded if the hotspot is not fully covered; 0% coverage → inconclusive | Absence of a mutation across unsequenced codons is not evidence of absence |
+| **Reliability gate** | A hotspot with indels or excessive forward/reverse discordance is reported as inconclusive | Indel/discordance clusters are the signature of misalignment in a low-quality read, and generate artefactual substitutions and premature stops |
 
-Masked and excluded calls are retained in dedicated CSV columns, so nothing is
-silently discarded.
+An internal consensus-quality step masks single-strand positions below Q30
+(`--min-single-strand-q`, default 30); this keeps coverage metrics and any deposited
+consensus sequences clean, but does **not** determine which mutations are reported —
+bidirectional confirmation does. Nothing is silently discarded: every call is retained
+in the by-region audit report with its confirmation flags.
 
 ---
 
@@ -127,24 +149,17 @@ corresponding reference protein.
 
 ---
 
-## Output
+## Output notation
 
-A CSV with one row per sample × hotspot. Key columns:
-
-| Column | Meaning |
-|---|---|
-| `Call_Status` | `Mutation detected` · `No mutation` · `No mutation (partial: X%)` · `INCONCLUSIVE — …` |
-| `AA_Mutations_in_Hotspot` | Amino-acid changes inside the hotspot, e.g. `S663P` |
-| `AA_Mutations_outside_Hotspot` | Changes in the flanking sequenced region |
-| `NT_Mutations` | Nucleotide substitutions, e.g. `T1987C` (CDS numbering) |
-| `Synonymous_NT_Changes` | Silent changes with no amino-acid consequence |
-| `Hotspot_Coverage` | Callable codons / total codons in the window |
-| `Hotspot_Local_Conflicts`, `Hotspot_Local_Indels` | Reliability-gate inputs |
-| `NT_Masked_LowConf`, `AA_Masked_LowConf` | Calls suppressed for low single-strand quality |
-| `QC_Flags` | Human-readable quality notes |
-
-Notation: `S663P` = reference Serine at protein position 663 replaced by Proline.
+`S663P` = reference Serine at protein position 663 replaced by Proline.
 `T1987C` = reference T at CDS nucleotide 1987 replaced by C.
+
+The **amplicon-level report** carries per-amplicon QC (`Call_Status`,
+`Hotspot_Coverage`, `Hotspot_Local_Conflicts/Indels`, `NT_Mutations`, `QC_Flags`, …).
+The **mutation reports** carry one row per called change with the classification and
+confirmation columns listed under [Reports](#reports) above. To obtain the reportable
+mutation set, use the `_confirmed_` file (or filter the by-region file to
+`Both_Strand_Confirmed == Yes` and `Amplicon_QC == Evaluable`).
 
 ---
 
@@ -156,8 +171,9 @@ Running on the bundled example data:
    S49   FKS2 HS1   → Mutation detected      S663P
 ```
 
-This isolate carries a serine-to-proline substitution at *FKS2* codon 663
-(`T1987C`), with 37/37 hotspot codons covered.
+The `_confirmed_` report contains one row — *FKS2* S663P (`T1987C`), confirmed on
+both strands (`Both_Strand_Confirmed = Yes`, `Confidence = High`), at 37/37 hotspot
+codons covered.
 
 ---
 

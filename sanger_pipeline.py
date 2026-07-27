@@ -5,18 +5,29 @@ Nakaseomyces glabratus (Candida glabrata) — FKS1 / FKS2 Mutation Detection
 
 SCOPE: This pipeline DETECTS AND REPORTS mutations only.  It performs no
 clinical interpretation — no resistance calls, drug lists, or MIC levels.
-Interpretation is done separately against the lab's own curated database, so
-the reference data has a single maintained source of truth.
+
+REPORTING STANDARD: Nakaseomyces glabratus is HAPLOID, so a true mutation is
+homozygous and must be independently confirmed on BOTH strands.  A variant is
+reported only when the forward and reverse reads agree on the variant base at
+the mutated position, with no local indels or forward/reverse discordance.
+Single-strand or strand-discordant calls are retained in the audit report but
+are NOT reported as findings.
 
 Workflow per sample × hotspot:
   1. Read AB1 chromatogram files (forward + reverse)
-  2. Quality-trim both reads (sliding-window Phred)
-  3. Align each read to the reference gene (local pairwise)
-  4. Build a reference-anchored consensus (F + R merged)
-  5. Report nucleotide mutations (substitutions + indels)
-  6. Translate the covered codons; report amino-acid mutations
-  7. Flag whether each result is trustworthy (coverage + reliability guards)
-  8. Export a CSV report of the observed mutations
+  2. Quality-trim both reads (sliding-window Phred >= 20 over 10 bp)
+  3. Align each read to the reference CDS (local pairwise; reverse read RC'd)
+  4. Build a reference-anchored consensus (forward + reverse merged)
+  5. Translate the covered codons; call nucleotide and amino-acid differences
+  6. Classify each mutation by gene (FKS1/FKS2) and region (HS1/HS2/Outside)
+  7. Score each mutation for bidirectional confirmation and local reliability
+  8. Export: (a) amplicon-level QC report, (b) full mutation-by-region audit,
+     (c) the reportable set of both-strand-confirmed mutations
+
+Outputs (CSV):
+  {prefix}_{ts}.csv             amplicon-level report (one row per amplicon)
+  {prefix}_by_region_{ts}.csv   every called mutation, with confirmation flags
+  {prefix}_confirmed_{ts}.csv   REPORTABLE SET — both-strand-confirmed only
 
 Reference genome: Nakaseomyces glabratus ATCC 2001
   GCF_010111755.1 (RefSeq) / GCA_010111755.1 (GenBank)
@@ -593,6 +604,123 @@ def split_mutations_by_window(
     return in_hotspot, out_hotspot
 
 
+def classify_region(gene: str, aa_pos: int) -> str:
+    """
+    Classify an amino-acid position as 'HS1', 'HS2' or 'Outside' for the given
+    gene, using the published hot-spot windows.  Used to label every observed
+    mutation across the whole sequenced region, not just the hot-spots.
+    """
+    for hs, (a0, a1) in HOTSPOT_AA_RANGES.get(gene, {}).items():
+        if a0 <= aa_pos <= a1:
+            return hs
+    return "Outside"
+
+
+def build_mutation_records(
+    sample_id: str, gene: str, amplicon_label: str,
+    aa_mutations: list[str], nt_mutations: list[str],
+    consensus: dict, conflicts: list, all_indels: list,
+    evaluable: bool,
+    flank: int = 15,
+    max_local_conflicts: int = HOTSPOT_MAX_LOCAL_CONFLICTS,
+    max_local_indels: int = HOTSPOT_MAX_LOCAL_INDELS,
+) -> list[dict]:
+    """
+    Expand an amplicon's amino-acid calls into one record per mutation, each
+    classified by gene (FKS1/FKS2) and region (HS1/HS2/Outside), with the
+    causative nucleotide change attached AND a per-mutation confidence score.
+
+    The reliability gate is applied LOCALLY around every mutation — not only in
+    the hot-spot — so flanking-region calls are vetted to the same standard:
+
+      Strand_Support   both  = all 3 codon bases confirmed by forward AND reverse
+                       single= codon covered by one strand only (still Q>=30)
+                       mixed = a mix across the 3 codon bases
+      Local_Conflicts  FW/RV disagreements within +-`flank` bp of the codon
+      Local_Indels     indels within +-`flank` bp of the codon
+      Edge_Dist_bp     distance to the nearest end of the consensus (read-end
+                       artefacts cluster here)
+      Confidence       High     both strands, 0 local indels, 0 local conflicts
+                       Moderate single strand OR 1 tolerated conflict, no indels
+                       Low      local indel, or conflicts over threshold
+                                (do NOT report without manual chromatogram review)
+
+    consensus  : per-position dict from build_consensus (has single_strand flags)
+    conflicts  : list of conflict strings (each contains an 'nt<pos>' token)
+    all_indels : list of indel strings (each contains an 'nt<pos>' token)
+    evaluable  : whether the amplicon's hot-spot passed QC (context flag)
+    """
+    nt_by_pos = {}
+    for tok in nt_mutations:
+        m = re.match(r"[ACGT](\d+)[ACGT]", tok)
+        if m:
+            nt_by_pos[int(m.group(1))] = tok
+
+    covered = sorted(consensus)                       # 0-based ref positions
+    span_lo, span_hi = (covered[0], covered[-1]) if covered else (0, 0)
+
+    records = []
+    for mut in aa_mutations:
+        core = mut.split()[0]
+        m = re.match(r"[A-Z*](\d+)[A-Z*]", core)
+        if not m:
+            continue
+        aa_pos = int(m.group(1))
+        c0 = (aa_pos - 1) * 3 + 1                      # first nt of codon (1-based)
+        nt_hits = [nt_by_pos[p] for p in (c0, c0 + 1, c0 + 2) if p in nt_by_pos]
+
+        # Bidirectional support AT THE MUTATED BASE(S).  C. glabrata is haploid,
+        # so a true mutation is homozygous and must be independently called by the
+        # forward AND reverse read (consensus source 'both_agree') at every changed
+        # position.  A single-strand call, or a position where the strands disagree
+        # ('both_conflict'), is NOT confirmation.
+        changed0 = [(p - 1) for p in (c0, c0 + 1, c0 + 2) if p in nt_by_pos]
+        sources = [consensus[p]["source"] for p in changed0 if p in consensus]
+        if sources and all(s == "both_agree" for s in sources):
+            strand = "both"
+        elif sources and any(s == "both_conflict" for s in sources):
+            strand = "conflict"
+        elif sources and all(s in ("FW", "RV") for s in sources):
+            strand = "single"
+        else:
+            strand = "mixed"
+        both_confirmed = (strand == "both")
+
+        # Local conflicts / indels within +-flank bp of the codon (1-based nt window).
+        lo, hi = c0 - flank, c0 + 2 + flank
+        loc_conf  = _count_nt_in(conflicts,  lo, hi)
+        loc_indel = _count_nt_in(all_indels, lo, hi)
+
+        # Distance (bp) to the nearest consensus edge.
+        codon0 = (aa_pos - 1) * 3
+        edge = min(codon0 - span_lo, span_hi - (codon0 + 2))
+
+        if not both_confirmed or loc_indel > max_local_indels or loc_conf > max_local_conflicts:
+            conf = "Low"
+        elif loc_conf == 0 and loc_indel == 0:
+            conf = "High"
+        else:
+            conf = "Moderate"
+
+        records.append({
+            "Sample_ID":      sample_id,
+            "FKS":            gene,
+            "HS":             classify_region(gene, aa_pos),
+            "AA_Change":      core,
+            "NT_Change":      "+".join(nt_hits) if nt_hits else "n/d",
+            "AA_Position":    aa_pos,
+            "Amplicon":       amplicon_label,
+            "Amplicon_QC":    "Evaluable" if evaluable else "Inconclusive",
+            "Both_Strand_Confirmed": "Yes" if both_confirmed else "No",
+            "Strand_Support": strand,
+            "Local_Conflicts": loc_conf,
+            "Local_Indels":   loc_indel,
+            "Edge_Dist_bp":   edge,
+            "Confidence":     conf,
+        })
+    return records
+
+
 def hotspot_coverage(
     consensus: dict, hs_aa_start: int, hs_aa_end: int
 ) -> tuple[int, int]:
@@ -628,10 +756,15 @@ def count_in_window(entries: list[str], hs_aa_start: int, hs_aa_end: int) -> int
     """
     nt_start = (hs_aa_start - 1) * 3 + 1
     nt_end   = hs_aa_end * 3
+    return _count_nt_in(entries, nt_start, nt_end)
+
+
+def _count_nt_in(entries: list[str], nt_lo: int, nt_hi: int) -> int:
+    """Count entries whose 'nt<pos>' token falls in the 1-based range [nt_lo, nt_hi]."""
     n = 0
     for e in entries:
         m = re.search(r"nt(\d+)", e)
-        if m and nt_start <= int(m.group(1)) <= nt_end:
+        if m and nt_lo <= int(m.group(1)) <= nt_hi:
             n += 1
     return n
 
@@ -910,6 +1043,16 @@ def analyse_hotspot(
 
     result["Call_Status"] = status
 
+    # ── Per-mutation records (whole covered region, classified by FKS + HS) ────
+    # Every called amino-acid change across the amplicon is expanded into one
+    # record, tagged FKS1/FKS2 and HS1/HS2/Outside, for the mutation-level report.
+    evaluable = not status.startswith("INCONCLUSIVE")
+    result["_mutation_records"] = build_mutation_records(
+        sample_id, gene, hotspot_label or hotspot,
+        aa_mutations, nt_mutations, consensus, conflicts, all_indels, evaluable,
+        max_local_conflicts=max_local_conflicts, max_local_indels=max_local_indels,
+    )
+
     # ── Conflicts detail ───────────────────────────────────────────────────────
     result["Conflicts"] = "; ".join(conflicts) if conflicts else "None"
 
@@ -1160,11 +1303,59 @@ def main(argv=None):
             flag   = "  ⚠" if status != "No mutation" else ""
             print(f"   {sample_id:<5} {gene} {raw_hotspot:<5} → {status:<48} {hs_mut}{flag}")
 
-    # Write CSV
+    # Write CSV (amplicon-level report)
     print("\n[4] Writing report …")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path  = args.out / f"{args.prefix}_{timestamp}.csv"
     write_csv(rows, out_path)
+
+    # Write the mutation-level report: one row per amino-acid change across the
+    # whole covered region, classified by FKS (1/2) and HS (1/2/Outside).
+    mut_records = [rec for r in rows for rec in r.get("_mutation_records", [])]
+
+    # Recurrence: how many distinct isolates carry this exact variant among
+    # EVALUABLE amplicons.  High recurrence is strong independent evidence that a
+    # variant is a real population polymorphism rather than a per-read artefact —
+    # complementary to the per-mutation Confidence score.
+    from collections import Counter as _Counter
+    var_isolates = _Counter()
+    seen_pairs = set()
+    for rec in mut_records:
+        if rec["Amplicon_QC"] != "Evaluable":
+            continue
+        key = (rec["FKS"], rec["AA_Change"], rec["Sample_ID"])
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            var_isolates[(rec["FKS"], rec["AA_Change"])] += 1
+    for rec in mut_records:
+        rec["Isolate_Count"] = var_isolates.get((rec["FKS"], rec["AA_Change"]), 0)
+
+    mut_records.sort(key=lambda x: (int(x["Sample_ID"][1:]) if x["Sample_ID"][1:].isdigit()
+                                    else 10**6, x["FKS"], x["AA_Position"]))
+    mut_cols = ["Sample_ID", "FKS", "HS", "AA_Change", "NT_Change", "AA_Position",
+                "Amplicon", "Amplicon_QC", "Both_Strand_Confirmed", "Strand_Support",
+                "Local_Conflicts", "Local_Indels", "Edge_Dist_bp", "Isolate_Count",
+                "Confidence"]
+
+    # Full mutation-by-region report (every called change, with confirmation flags).
+    mut_path = args.out / f"{args.prefix}_by_region_{timestamp}.csv"
+    with open(mut_path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=mut_cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(mut_records)
+    print(f"  Mutation-by-region report → {mut_path}  ({len(mut_records)} mutations)")
+
+    # Reportable set: bidirectionally-confirmed mutations from evaluable amplicons.
+    # C. glabrata is haploid, so only variants seen on BOTH strands are reported.
+    confirmed = [r for r in mut_records
+                 if r["Both_Strand_Confirmed"] == "Yes"
+                 and r["Amplicon_QC"] == "Evaluable"]
+    conf_path = args.out / f"{args.prefix}_confirmed_{timestamp}.csv"
+    with open(conf_path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=mut_cols, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(confirmed)
+    print(f"  Both-strand-confirmed mutations → {conf_path}  ({len(confirmed)} mutations)")
 
     # Summary — counts + the rows that actually need attention
     print("\n" + "=" * 70)
