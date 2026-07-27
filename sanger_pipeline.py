@@ -748,6 +748,28 @@ def hotspot_coverage(
     return covered, total
 
 
+def hotspot_bidirectional(consensus: dict, hs_aa_start: int, hs_aa_end: int) -> tuple[int, int]:
+    """
+    Of the CALLABLE hotspot codons, how many are covered by BOTH strands?
+
+    Returns (bidirectional_codons, callable_codons).
+
+    Rationale: N. glabratus is haploid, so a wild-type ('no mutation') call is
+    only trustworthy where both strands read the region — a single strand cannot
+    confirm the absence of a mutation any more than it can confirm its presence.
+    A codon counts as bidirectional when none of its three bases is single-strand.
+    """
+    callable_codons = bidir = 0
+    for aa_pos in range(hs_aa_start, hs_aa_end + 1):
+        nt0 = (aa_pos - 1) * 3
+        codon = (nt0, nt0 + 1, nt0 + 2)
+        if all(p in consensus and consensus[p]["callable"] for p in codon):
+            callable_codons += 1
+            if all(not consensus[p]["single_strand"] for p in codon):
+                bidir += 1
+    return bidir, callable_codons
+
+
 def count_in_window(entries: list[str], hs_aa_start: int, hs_aa_end: int) -> int:
     """
     Count how many entries (conflict/indel strings that contain an 'nt<pos>'
@@ -997,6 +1019,11 @@ def analyse_hotspot(
     hs_cov_pct = (100 * hs_covered // hs_total) if hs_total else 0
     result["Hotspot_Coverage"] = f"{hs_covered}/{hs_total} codons ({hs_cov_pct}%)"
 
+    # Bidirectional support of the hotspot (haploid: a wild-type call needs both
+    # strands, just as a mutation call does).
+    hs_bidir, _ = hotspot_bidirectional(consensus, hs_range[0], hs_range[1])
+    result["Hotspot_Bidirectional"] = f"{hs_bidir}/{hs_covered} codons"
+
     # ── Hotspot reliability gate ──────────────────────────────────────────────
     # Count discordance and indels INSIDE the hotspot window — the artifact
     # signature that produces spurious mutations / premature stops.
@@ -1040,6 +1067,18 @@ def analyse_hotspot(
                 f"PARTIAL hotspot coverage ({hs_covered}/{hs_total} codons) "
                 "— uncovered codons cannot be assessed"
             )
+
+    # Bidirectional gate: a wild-type ('No mutation') call requires the covered
+    # hotspot codons to be read by BOTH strands.  A single-strand-only hotspot
+    # cannot confirm the absence of a mutation in this haploid organism.  (A
+    # confirmed mutation, being both-strand by definition, is left untouched.)
+    if status.startswith("No mutation") and hs_covered > 0 and hs_bidir < hs_covered:
+        status = "INCONCLUSIVE — single-strand hotspot (not bidirectionally confirmed)"
+        flags.append(
+            f"INCONCLUSIVE: {hs_covered - hs_bidir}/{hs_covered} covered hotspot "
+            "codon(s) read by one strand only — wild-type call cannot be confirmed "
+            "bidirectionally; repeat sequencing"
+        )
 
     result["Call_Status"] = status
 
@@ -1165,6 +1204,7 @@ CSV_COLUMNS = [
     "AA_Range",
     "Strand_Coverage",
     "Hotspot_Coverage",
+    "Hotspot_Bidirectional",
     "Hotspot_Local_Conflicts",
     "Hotspot_Local_Indels",
     "Single_Strand_Positions",
