@@ -5,7 +5,26 @@ type: software
 authors:
   - family-names: Alsanea
     given-names: Madain
-repository-code: "https://github.com/USERNAME/fks-sanger-pipeline"
+  - family-names: Alsweed
+    given-names: Abdulrahman
+  - family-names: Alabdulkareem
+    given-names: Maha
+  - family-names: Al-Qahtani
+    given-names: Ahmed
+  - family-names: Alhafdhi
+    given-names: Deema
+  - family-names: Alrasheed
+    given-names: Bandar
+  - family-names: Almaghrabi
+    given-names: Reem
+  - family-names: Althwadi
+    given-names: Sahar
+  - family-names: AlGhamdi
+    given-names: Heba
+  - family-names: Alhamlan
+    given-names: Fatimah
+    email: falhamlan@kfshrc.edu.sa
+repository-code: "https://github.com/madainsaleh2/fks-sanger-pipeline"
 abstract: >-
   Automated detection of FKS1 and FKS2 hotspot mutations from paired Sanger
   sequencing chromatograms in Nakaseomyces glabratus. Performs quality
@@ -21,4 +40,4 @@ keywords:
   - bioinformatics
 license: MIT
 version: 1.0.0
-date-released: "2026-07-19"
+date-released: "2026-10-12"
