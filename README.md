@@ -1,5 +1,8 @@
 # FKS Sanger Pipeline
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23337013.svg)](https://doi.org/10.5281/zenodo.23337013)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Automated detection of *FKS1* and *FKS2* hotspot mutations from paired Sanger
 sequencing chromatograms in **_Nakaseomyces glabratus_** (formerly *Candida glabrata*).
 
