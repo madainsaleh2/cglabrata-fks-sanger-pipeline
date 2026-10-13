@@ -24,7 +24,7 @@ authors:
   - family-names: Alhamlan
     given-names: Fatimah
     email: falhamlan@kfshrc.edu.sa
-repository-code: "https://github.com/madainsaleh2/fks-sanger-pipeline"
+repository-code: "https://github.com/madainsaleh2/cglabrata-fks-sanger-pipeline"
 abstract: >-
   Automated detection of FKS1 and FKS2 hotspot mutations from paired Sanger
   sequencing chromatograms in Nakaseomyces glabratus. Performs quality
